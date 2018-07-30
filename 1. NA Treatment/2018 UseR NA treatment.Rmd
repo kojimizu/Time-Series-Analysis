@@ -2,9 +2,6 @@
 title: "Handling missing values with R"
 author: "Koji Mizumura"
 output:
-  pdf_document:
-    toc: yes
-    toc_depth: '4'
   html_document:
     css: hideOutput.css
     includes:
@@ -12,6 +9,9 @@ output:
     toc: yes
     toc_depth: 4
     toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '4'
   word_document:
     toc: yes
     toc_depth: '4'
@@ -427,16 +427,183 @@ plot(res.MIPCA,choice="var")
 The plots  represent the projection of the individuals (top) and variables (bottom) of each imputed data set as supplementary elements onto the reference configuration obtained with the  iterative PCA algorithm. For the individuals, a confidence area is constructed for each, and if one has no missing entries, its confidence area is restricted to a point. All the plots show that the variability across different imputations is small and a user can interpret the PCA results with confidence.
 
 ### Perform regression
+MI aims to apply a statistical method on an incomplete dataset. We now apply a regression model on each imputed dataset of the amelia method and MIPCA methods. 
+```{r}
+resamelia <- lapply(res.amelia$imputations,as.data.frame)
+head(resamelia$imp1)
 
+# a regression on each imputed dataset
+fitamelia <- lapply(resamelia,lm,                    formula="maxO3~T9+T12+Ne9+Ne12+Ne15+Vx9+Vx12+Vx15+maxO3v")
 
+# fitamelia <- lapply(resamelia, with, lm(maxO3 ~T9+T12+T15+Ne9+Ne12+Ne15+Vx9+Vx12+Vx15+maxO3v))
+```
 
+```{r eval=FALSE}
+library(mice)
+imp.mice <- mice(don,m=100,defaultMethod="norm.boot")
+# the variability of the parameters is obtained
 
+lm.mice.out <- with(imp.mice,lm(maxO3~T9+T12+T15+Ne9+Ne12+Ne15+Vx9+Vx12+Vx15+maxO3v))
+```
 
+```{r}
+res.MIPCA <- lapply(res.MIPCA$res.MI,as.data.frame)
+fitMIPCA <- lapply(res.MIPCA,lm,formula="maxO3~T9+T12+T15+Ne9+Ne12+Ne15+Vx9+Vx12+Vx15+maxO3v")
+```
 
+* Aggregate the results of regression with multiple imputation according to Rubin's rule for MI with amelia, and with PCA with the **pool** function from the `mice` package. 
 
+```{r}
+poolamelia <- pool(as.mira(fitamelia))
+summary(poolamelia)
 
+poolMIPCA <- pool(as.mira(fitMIPCA))
+summary(poolMIPCA)
 
+# pool.mice <- pool(lm.mice.out)
+# summary(pool.mice)
 
+```
 
+* Write a function that removes the variables with the largest p-values step by step (each time a variable is removed th regression model is performed again) until all variables are significant.
+
+```{r}
+don2 <- don
+reg <- lm(maxO3~.,data=don2)
+while(any(summary(reg)$coeff[-1,4]>0.05)){
+  don2 <- don2[,!(colnames(don2)%in%names(which.max(summary(reg)$coeff[-1,4])))]
+  reg <- lm(maxO3~.,data=don2)
+}
+```
+
+We combine the results and pefrom the **regression with missing values**
+```{r}
+#submodel to compare
+
+library(mice)
+
+fitMIPCA <- lapply(res.MIPCA,lm,formula="maxO3~T12+Ne9+Vx12+maxO3v")
+poolMIPCA <- pool(as.mira(fitMIPCA))
+summary(poolMIPCA)
+
+# lm.mice.out <- with(imp.mice,lm(maxO3))
+# pool.mice <- pool(lm.mice.out)
+# summary(pool.mice)
+fitamelia <- lapply(resamelia,lm, formula="maxO3~T12+Ne9+Vx12+maxO3v")
+poolamelia <- pool(as.mira(fitamelia))
+summary(poolamelia)
+```
+
+## 1.5) Ecological example
+Studies in community ecology aim to understand how and why individuals of different species co-occur in the same location at the same time. Hence, ecologists usually collect and store data on species distribution as tables containing the abundances of different species in several sampling sites. Additional information such as measures of environmental variables or species traits can also be recorded to examine the effects of abiotic features (characteristics, i.e. due to physico-chemical action and no biological action) and biotic features. 
+
+Several projects compile data from preexisting databases. Due to the wide heterogeneity of measurement methods and research objectives, these huge data sets are often characterized by a high number of missing values. Hence, in addition to ecological questions, such data sets also present some important methodological and technical challenges for multivariate analysis. 
+
+The GLOPNET data set contains 6 traits measured for 2494 plant species: LMA (leaf mass per area), LL (leaf lifes-pan), Amass (photosynthetic assimilation), Nmass (leaf nitrogen), Pmass (leaf phosphorus), Rmass (dark respiration rate). The last four variables are expressed per leaf dry mass. GLOPNET is a compilation of several existing data sets and thus contains a large proportion of missing values. All traits were log-normally distributed and log-transformed before analysis. 
+
+```{r}
+Ecolo <- read.csv("C:/Users/kojikm.mizumura/Desktop/Data Science/8. UseR2018/1 NA Treatment/ecological.csv",header=T,sep=";",dec=",")
+```
+
+Lets delete species with only missing values for continuous variables
+```{r}
+ind <- which(rowSums(is.na(Ecolo[,-1]))==6)
+biome <- Ecolo[-ind,1] ### Keep a categorical variables
+Ecolo <- Ecolo[-ind,-1] ### Select continuous variables
+dim(Ecolo)
+```
+
+```{r}
+# proportion of missing values
+sum(is.na(Ecolo))/(nrow(Ecolo)*ncol(Ecolo))
+## 55% of missing values
+```
+
+```{r}
+# delete species with missing values
+library(Amelia)
+missmap(Ecolo)
+
+dim(na.omit(Ecolo))
+# only 72 remining species..
+```
+
+$53.38%$ of the entires in the GLOPNET data set are missing. Only 72 species have complete information for the 6 traits and the proportion of missing values varied between 4.97% (LMA) to 89.01%
+```{r ecolo-ecolo}
+vis_miss(Ecolo)
+vis_miss(Ecolo,cluster=T)
+```
+
+```{r ecolo-gg-miss-var}
+gg_miss_case(Ecolo)
+gg_miss_var(Ecolo)
+```
+
+```{r ecolo-gg-miss-upset}
+library(VIM)
+library(devtools)
+library(naniar)
+library(missMDA)
+library(Amelia)
+library(mice)
+library(missForest)
+library(FactoMineR)
+library(tidyverse)
+library(missForest)
+
+install.packages("remotes")
+remotes::install_github("njtierney/naniar")
+
+??gg_miss_upset
+
+# gg_miss_upset(Ecolo,
+#               order.by = "freq")
+```
+
+```{r}
+miss_case_table(Ecolo)
+miss_var_table(Ecolo)
+```
+
+```{r}
+# visualize the pattern
+library(VIM)
+aggr(Ecolo)
+aggr(Ecolo,only.miss=T,numbers=T,sortVar=T)
+res <- summary(aggr(Ecolo,prop=TRUE,combined=TRUE))$combinations
+res[rev(order(res[,2])),]
+
+mis.ind <- matrix("o",nrow=nrow(Ecolo),ncol=ncol(Ecolo))
+mis.ind[is.na(Ecolo)] <- "m"
+dimnames(mis.ind) <- dimnames(Ecolo)
+library(FactoMineR)
+resMCA <- MCA(mis.ind)
+plot(resMCA,invis="ind",title="MCA graph of the categories")
+```
+
+```{r}
+library(missMDA)
+### nb <- estim_ncpPCA(Ecolo,method.cv="Kfold",nbsim=100) ### Time consuming!
+res.comp <- imputePCA(Ecolo,ncp=2)
+
+#Perform a PCA on the completed data set
+imp <- cbind.data.frame(res.comp$completeObs,biome)
+res.pca <- PCA(imp,quali.sup=7,graph=FALSE)
+plot(res.pca, hab=7, lab="quali")
+plot(res.pca, hab=7, lab="quali",invisible="ind")
+plot(res.pca, choix="var")
+
+# Compare with PCA on the data imputed by the mean
+PCA(Ecolo)
+
+```
+
+This first axis corresponding to the "leaf economic spectrum" separates species with potential for quick returns for investment with high values for Nmass, Amass, Rmass and Pmass and low values for LL and LMA (right part) from species with slow returns on the left part. Scores for the traits are very consistent between methods, to a lessert extent for the Mean. 
+
+This representation can be used to add external information: grouping species by major biomes illustrates the universality of the leaf economic spectrum but also some specificities (e.g., Desert and Boreal forest mainly contain species of the quick-return end). 
+
+The graphical representation obtained by the Mean imputation highlights a very particular shape indicating that results are not reliable. 
+
+# 2) Categorical/mixed/multi-block data with missing values
 
 
