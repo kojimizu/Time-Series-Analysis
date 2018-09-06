@@ -11,7 +11,7 @@ Github - repository: https://github.com/stefvanbuuren/Winnipeg
 " "  
 tidyverse introduction for data pre-processing   
 
-3. Recipes for data pre-processing
-https://www.youtube.com/watch?v=JacpQdj1Vfc
+3. Recipes for data pre-processing　　
+https://www.youtube.com/watch?v=JacpQdj1Vfc　　
 https://github.com/tidymodels/recipes
 
