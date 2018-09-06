@@ -10,3 +10,6 @@ Github - repository: https://github.com/stefvanbuuren/Winnipeg
 2. "Wrangling with tidyverse" updated on August 31st  
 " "  
 tidyverse introduction for data pre-processing   
+
+3. Recipes for data pre-processing
+
