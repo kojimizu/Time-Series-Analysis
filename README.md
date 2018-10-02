@@ -13,5 +13,6 @@ tidyverse introduction for data pre-processing
 
 3. Recipes for data pre-processing  
 https://www.youtube.com/watch?v=JacpQdj1Vfc  
+https://github.com/topepo/user2018  
 https://github.com/tidymodels/recipes  
 
