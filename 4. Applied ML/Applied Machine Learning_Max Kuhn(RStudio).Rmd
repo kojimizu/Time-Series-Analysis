@@ -1,0 +1,367 @@
+---
+title: "Applied Machine Learning by RStudio2017"
+author: "Koji Mizumura"
+date: ' October 22, 2018'
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    code_folding: hide
+    fig_height: 4.5
+    fig_width: 7
+    highlight: tango
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+https://github.com/topepo/rstudio-conf-2018  
+
+```{r include=FALSE}
+library(tidyverse)
+library(magrittr)
+library(AmesHousing)
+library(caret)
+library(recipes)
+library(AppliedPredictiveModeling)
+```
+
+# Getting started
+## Course Overview
+
+The session will step through the process of building, visualizing, testing and comparing models that are focused on prediction. The goal of the course is to provide a through workflow in R that can be used with many different regression or classification techniques. Case studies are illustrated functionality.
+
+The goal is to be able to easily build predictive/machine learning models in R using a variety of packages and model types. 
+- "Moldes that are focused on prediction": what does that mean?
+- "Machine learning": so this is deep learning with massive data sets, right?
+
+The course is broken up into sections for regression (predicting numeric outcome) and classification (predicting a category).
+
+## Why R for modeling?
+1. R has *cutting edge models*. Machine learning developers in some domains use R as their primary computing environment and their work often results in R packages.
+2. It is easy to port or link to other applications. R doesn't try to be everything to everyone. If you prefer models implemented in `C`, `C++`, `tensorflow`, `keras`, `python`, `stan`, or `Weka`, you can access these applications without leaving R.
+3. R and R packages are built by people who **do** data analysis.
+4. The S language is very mature.
+5. The machine learning environment in R is extremely rich.
+
+## Downsides to modeling in R
+1.  R is a data analysis language and is not C or Java. If a high performance deployment is required, R can be treated like a prototyping language.
+2. R is s mostly memory-bound. There are plenty of exceptions to this though.
+3. The main issue is one of consistency of interface. 
+
+For example:
+- here are two methods for specifying what terms are in a model1. Not all models have both.
+- 99% of model functions automatically generate dummy variables.
+- Sparse matrices can be used (unless the can't).
+
+## Syntax for computing predicted class probabilities
+|**Function**  | **Package**                 | **Code**                                   |
+| :------------| :-------------------------- | :----------------------------------------- |
+| lda          | MASS                        |  predict(obj)                              |
+| glm          | stats                       |  predict(obj, type = "response")           |
+| gbm          | gbm                         |  predict(obj, type = "response", n.trees)  |
+| mda          | mda                         |  predict(obj, type = "posterior")          |
+| rpart        | rpart                       |  predict(obj, type = "prob")               |
+| Weka         | RWeka                       |  predict(obj, type = "probability")        |
+| logitboost   | LogitBoost                  |  predict(obj, type = "raw", nIter)         |
+
+## Different philosophies used here
+There are two main philosophies to data analysis code that will be discussed in this workshop:
+
+The main traditional approach uses high-level syntax and is perhaps the most **untidy** code that you will encounter. 
+
+`caret` is the primary package for untidy predictive modeling:
+1. More traditional R coding style.
+2. High-level "I do that for you" syntax.
+3. More comperehensive (for now) and less modlular.
+4. Contains many optimizations and is easily parallelized.
+
+The *tidy* modeling approach espouses the tenets of the `tidyverse`
+1. Reuses existing data structures
+2. Compose simple functions with the pipe
+3. Embrase functional programming
+4. Design for humans
+
+This approach is exemplified by packages such as:
+`modelr`, `broom`, `recipes`, `rsample`, `yardstick` and `tidyposterior`.
+
+## Example data set - house prices
+
+For regression problems, we will use the Ames IA housing data. 
+There are 2,930 properties in the data. 
+
+The sale price was recorded along 81 predictors, including
+- Location (e.g. neighborhood) and lot information.
+- House components (garage, fireplace, pool, porch, etc.).
+- General assessments such as overall quality and condition.
+- Number of bedrooms, baths, and so on.
+
+More details can be found in De Cock (2011, Journal of Statistics Education).
+
+he raw data are at http://bit.ly/2whgsQM but we will use a processed version found in the `AmesHousing` package.
+```{r}
+library(AmesHousing)
+AmesHousing::ames_raw
+```
+
+```{r}
+library(AmesHousing)
+ames_geo 
+```
+
+
+```{r warning=FALSE, echo=FALSE}
+library(leaflet)
+
+leaflet() %>% 
+  addTiles() %>%
+  addCircleMarkers(data=ames_geo, radius=3)
+  # addMarkers(lng=ames_geo$Longitude, lat=ames_geo$Latitude)
+```
+
+## Example data set - Fuel economy
+
+The data that are used here are an extended version of the ubiquitous `mtcars` data set. [fueleconomy.gov](https://www.fueleconomy.gov/feg/download.shtml) was used to obtain fuel efficiency data on cars from 2015-18.
+
+Over this time range, duplicate ratings were eliminated; these occur when the same car is sold for several years in a row. As a result, there are 3294 cars that are listed in the data. The predictors include the automaker and addition information about the cars (e.g. intake valves per cycle, aspiration method, etc).
+
+In our analysis, the data from 2015-2017 are used for training to see if we can predict the 609 cars that were new in 2018.
+
+These data are supplied in the GitHub repo.
+
+## Example data set - Predicting profession
+OkCupid is an online data site that serves international users. Kim and Escobedo-Land (2015, Journal of Statistics Education) describe a data set where over 50,000 profiles from the San Fransisco area were made available by the company.
+
+The data contains several types of fields:
+
+- a number of open text essays related to interests and personal descriptions
+- single choice type fields, such as profession, diet, gender, body type, etc.
+- multiple choice data, including languages spoken, etc.
+- **no** usernames or pictures were included.
+
+We will try to predict whether someone has a profession in the STEM fields (science, technology, engineering, and math) using a random sample of the overall dataset.
+
+## Tidyverse syntax
+Many tidyverse functions have syntax unlike base R code. For example:
+
+- vectors of variable names are eschewed in favor of *functional programming*. For example:
+```{r warning=FALSE, eval=FALSE}
+contains("Sepal")
+
+# instead of
+c("Sepal.Width", "Sepal.Length")
+```
+
+- The *pipe* operator is preferred. For example:
+```{r eval=FALSE}
+merged <- inner_join(a, b)
+# is equal to
+merged <- a %>%
+  inner_join(b)
+```
+
+- Functions are more *modular* than their traditional analogs (`dplyr`'s `filter` and `select` VS `base::subset`).
+
+## Some example data manipulation code
+```{r eval=FALSE}
+library(tidyverse)
+
+ames <- read_delim("http://bit.ly/2whgsQM", delim = "\t") %>%
+  rename_at(vars(contains(' ')), funs(gsub(' ', '_', .))) %>%
+  rename(Sale_Price = SalePrice) %>%
+  filter(!is.na(Electrical)) %>%
+  select(-Order, -PID, -Garage_Yr_Blt)
+```
+
+```{r}
+
+library()
+
+ames <- ames_raw %>% 
+  rename_at(vars(contains(' ')), funs(gsub(' ', '_', .))) %>%
+  rename(Sale_Price=SalePrice) %>% 
+  filter(!is.na(Electrical)) %>% 
+  select(-Order,-PID, -Garage_Yr_Blt)
+  
+  
+ames %>% 
+  group_by(Alley) %>% 
+  summarize(mean_price=mean(Sale_Price/1000),
+            n=sum(!is.na(Sale_Price)))
+```
+
+## Example `ggplot2` code
+```{r}
+library(ggplot2)
+
+ggplot(ames,
+       aes(x=Garage_Type,
+           y=Sale_Price))+
+  geom_violin()+
+  coord_trans(y="log10")+
+  xlab("Garage Type")+
+  ylab("Sale Price")
+```
+
+## Examples of `purrr::map*`
+
+```{r}
+library(purrr)
+
+# Summarize via purrr::map
+by_alley <- split(ames, ames$Alley)
+is_list(by_alley)
+# glimpse(by_alley)
+```
+
+```{r}
+map(by_alley, nrow)
+```
+
+```{r}
+map_int(by_alley, nrow)
+```
+
+```{r}
+# work on no-list vectors too
+ames %>% 
+  mutate(Sale_Price=Sale_Price %>% 
+           map_dbl(function(x)x/1000)) %>% 
+  select(Sale_Price, Yr_Sold) %>% 
+  head()
+```
+
+## Quick data investigation
+To get warmed up, let's load the Ames data and do some basic investigations into the variables, such as exploratory visualizations or summary statistics. The idea is to get a feel for the data.
+```{r}
+library(AmesHousing)
+ames <- make_ames()
+```
+
+
+## Where we go from here
+
+**Part 2** Basic Principles
+- Data Splitting, Models in R, Resampling, Tuning(`rsample`)
+
+**Part 3** Feature engineering preprocessing
+- Data treatment (`recipes`)
+
+**Part 4** Regression Modeling
+- Measuring Performance, penalized regression, multivariate adaptive regression splines (MARS), ensembles (`yardstick`, `recipes`, `caret`, `earth`, `glmnet`, `tidyposterior`, `doParallel`)
+
+**Part 5** Classification Modeling
+- Measuring Performance, trees, ensembles, naive Bayes (`yardstick`, `recipes`, `caret`, `rpart`, `klaR`, `tidyposterior`)
+
+## Resources
+http://www.tidyverse.org/
+[R for Data Science](http://r4ds.had.co.nz/)
+[Jenny's purrr tutorial](https://jennybc.github.io/purrr-tutorial/) or [Happy R Users Purrr](https://www.rstudio.com/resources/videos/happy-r-users-purrr-tutorial/)
+[Programming with dplyr vignette](https://cran.r-project.org/web/packages/dplyr/vignettes/programming.html)
+[Selva Prabhakaran's ggplot2 tutorial](http://r-statistics.co/Complete-Ggplot2-Tutorial-Part1-With-R-Code.html)
+[caret package documentation](https://topepo.github.io/caret/)
+[CRAN Machine Learning Task View](https://cran.r-project.org/web/views/MachineLearning.html)
+
+About these slides.... they were created with Yihui's xaringan and the stylings are a slightly modified version of Patrick Schratz's Metropolis theme.
+
+# Part2 Basic principles
+
+## Introduction
+In this section, we will introduce concepts that are useful for any type of machine learning model:
+- modeling versus the model
+- data splitting
+- resampling
+- tuning parameters and overfitting
+- model tuning
+
+Many of these topics will be put into action in later sections.
+
+## The modeling process
+Common steps during model building are:
+
+- estimating model parameters (i.e., training models)
+- determining the values of *tuning parameters* that cannot be directly calculated from the data
+- model selection (within a model type) and model comparison (between types)
+- calculating the performance of the final model that will generalize to new data
+
+Many books and course portray predictive modeling as a short sprint. A better analogy would be a marathon or campaign (depending on how hard the problem is).
+
+## What the modeing process usually look like
+```{r}
+knitr::include_graphics("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/rstudio-conf-2018-master/intro-process-1.svg")
+```
+
+# Data usage
+## Data Splitting and spending
+
+How do we "spend" the data to find an optimal model?
+We typically split data into training an test data sets:
+
+- **Training set**: these data are used to estimate model parameters and pick the values of the complexity parameter(s) for the model.
+- **Test set**: these data can be used to get an independent assessment of model efficacy. They should not be used during model training. 
+
+The more data we spend, the better estimates we'll get (provided the data is accurate). 
+
+Given a fixed amount of data:
+- too much spent in training won't allow us to get a good assessment of predictive peformance. We may find a model that fits the training data very well, but is not generalizable (overfitting)
+- too much spent in testing won't allow us to get a good assessment of model parameters
+
+Statisticall,y the est course of action would be use all the data for model building and use statistical methods to get estimates of error.
+
+From a non-statistical perspective, many consmers of complex models emphasize the need for untouched set of sampled to evaluate performance.
+
+## Large data set
+When a large amount of data are available, it might seem like a good idea to put a large amount into the training set. *Personally*, I think that this causes more trouble than it is worth due to diminishing returns on performance and the added cost and compexity of the required infrastructure.
+
+Alternatively, it is probably a better idea to reserve good percentages of the data for specific parts of the modeling process. For example: 
+
+- Save a large chunk of data to perform feature selection prior to model building
+- Retain data to calibrarate class probabilities or determine a cutoff via an ROC curve. 
+
+Also there may be little need for iterative resampling of the data. A single holdout (aka validation set) may be sufficient in some cases if the data are large enough and the data sampling mechanism is solid.
+
+
+## Mechanis of data splitting
+
+There are a few different ways to do the split: simple random sampling, stratified sampling based on the `outcome`, by `date`, or `methods` that focus on the distribution of the predictors.
+
+For stratification:
+- **classification**: this would mean sampling within the classes as to preserve the distribution of the outcome in the training and test sets
+- **regression**: determine the quartiles of the data set and samples within those artificial groups
+
+## Ames Housing data
+```{r}
+ames <- make_ames()
+dim(ames)
+```
+
+```{r}
+library(rsample)
+
+# make suret you get the same random numbers
+set.seed(4595)
+
+data_split <-initial_split(ames,strata="Sale_Price") 
+
+ames_train <- training(data_split)
+ames_test <- testing(data_split)
+
+nrow(ames_train)/nrow(ames)
+```
+
+## Outcome distribution
+
+
+
+
+
+
+
+
+
+
+
+
