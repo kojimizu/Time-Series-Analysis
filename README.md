@@ -16,7 +16,7 @@ https://www.youtube.com/watch?v=JacpQdj1Vfc
 https://github.com/topepo/user2018  
 https://github.com/tidymodels/recipes  
 
-**4. Applied Machine Learning**
+**4. Applied Machine Learning**  
 RStudio 2017 Conference by Max Kuhn  
 https://github.com/hetong007/user2018tutorial  
 
