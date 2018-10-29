@@ -20,3 +20,10 @@ https://github.com/tidymodels/recipes
 RStudio 2017 Conference by Max Kuhn  
 https://github.com/hetong007/user2018tutorial  
 
+
+
+
+# -------------------------
+Useful packages
+datapasta + reprex 
+https://github.com/MilesMcBain/datapasta
