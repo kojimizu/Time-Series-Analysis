@@ -24,6 +24,6 @@ https://github.com/hetong007/user2018tutorial
 
 
 # -------------------------
-Useful packages
-datapasta + reprex 
+Useful packages  
+simple data load as tibble: datapasta + reprex   
 https://github.com/MilesMcBain/datapasta
