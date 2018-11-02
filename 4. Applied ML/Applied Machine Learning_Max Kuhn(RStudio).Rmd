@@ -2,10 +2,8 @@
 title: "Applied Machine Learning by RStudio2017"
 author: "Koji Mizumura"
 date: ' October 22, 2018'
+always_allow_html: yes
 output:
-  html_document:
-    df_print: paged
-    toc: yes
   html_notebook:
     code_folding: hide
     fig_height: 4.5
@@ -16,17 +14,24 @@ output:
     toc: yes
   word_document:
     toc: yes
+  html_document:
+    df_print: paged
+    toc: yes
 ---
 
 https://github.com/topepo/rstudio-conf-2018  
 
 ```{r include=FALSE}
-library(tidyverse)
-library(magrittr)
-library(AmesHousing)
-library(caret)
-library(recipes)
-library(AppliedPredictiveModeling)
+library(tidyverse) #tidying
+library(magrittr) #tidying
+library(rsample)
+
+library(AmesHousing) #data
+ 
+library(recipes) #pre-processing
+library(caret) # modeling
+library(AppliedPredictiveModeling) # modeling
+library(broom) # modeling
 ```
 
 # Getting started
@@ -279,7 +284,7 @@ In this section, we will introduce concepts that are useful for any type of mach
 
 Many of these topics will be put into action in later sections.
 
-## The modeling process
+### The modeling process
 Common steps during model building are:
 
 - estimating model parameters (i.e., training models)
@@ -289,13 +294,13 @@ Common steps during model building are:
 
 Many books and course portray predictive modeling as a short sprint. A better analogy would be a marathon or campaign (depending on how hard the problem is).
 
-## What the modeing process usually look like
+### What the modeing process usually look like
 ```{r}
-knitr::include_graphics("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/rstudio-conf-2018-master/intro-process-1.svg")
+knitr::include_graphics("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/Applied ML/intro-process-1.png")
 ```
 
-# Data usage
-## Data Splitting and spending
+## Data usage
+### Data Splitting and spending
 
 How do we "spend" the data to find an optimal model?
 We typically split data into training an test data sets:
@@ -313,7 +318,7 @@ Statisticall,y the est course of action would be use all the data for model buil
 
 From a non-statistical perspective, many consmers of complex models emphasize the need for untouched set of sampled to evaluate performance.
 
-## Large data set
+### Large data set
 When a large amount of data are available, it might seem like a good idea to put a large amount into the training set. *Personally*, I think that this causes more trouble than it is worth due to diminishing returns on performance and the added cost and compexity of the required infrastructure.
 
 Alternatively, it is probably a better idea to reserve good percentages of the data for specific parts of the modeling process. For example: 
@@ -324,7 +329,7 @@ Alternatively, it is probably a better idea to reserve good percentages of the d
 Also there may be little need for iterative resampling of the data. A single holdout (aka validation set) may be sufficient in some cases if the data are large enough and the data sampling mechanism is solid.
 
 
-## Mechanis of data splitting
+### Mechanis of data splitting
 
 There are a few different ways to do the split: simple random sampling, stratified sampling based on the `outcome`, by `date`, or `methods` that focus on the distribution of the predictors.
 
@@ -332,13 +337,13 @@ For stratification:
 - **classification**: this would mean sampling within the classes as to preserve the distribution of the outcome in the training and test sets
 - **regression**: determine the quartiles of the data set and samples within those artificial groups
 
-## Ames Housing data
+### Ames Housing data
 ```{r}
 ames <- make_ames()
 dim(ames)
 ```
 
-```{r}
+```{r warning=FALSE}
 library(rsample)
 
 # make suret you get the same random numbers
@@ -352,15 +357,508 @@ ames_test <- testing(data_split)
 nrow(ames_train)/nrow(ames)
 ```
 
-## Outcome distribution
+### Outcome distribution
+```{r}
+library(ggplot2)
+
+# Do the distribution line-up?
+ggplot(ames_train,aes(x=Sale_Price))+
+   geom_line(stat = "density", 
+            trim = TRUE) + 
+  geom_line(data = ames_test, 
+            stat = "density", 
+            trim = TRUE, col = "red")
+```
+
+## Creating models in R
+### Specifying models in R using formulas
+To fit a model to the housing data, the model terms must be specified. Historically, there are two main interfaces for doing this. 
+
+The fomula interface using R [fomula rules](https://cran.r-project.org/doc/manuals/r-release/R-intro.html#Formulae-for-statistical-models) to specify a symbolic representation of the terms and variables. For example:
+```r
+foo(Sale_Price ~ Neightborhood + Year_Sold + Neighborhood:Year_Sold, data=ames_train)
+```
+
+OR 
+
+```r
+foo(Sale_Price~., data=ames_train)
+```
+
+OR 
+```r
+foo(log10(Sale_Price)~ns(Longitude, df=3)+ns(Latitude,df=3),data=ames_train)
+```
+
+This is very convenient but it has some disadvantages.
+
+### Downsides to formulas
+- You can't nest in-line functions such as `foo(y ~ pca(scale(x1), scale(x2), scale(x3)), data =dat)`.
+- All the model matrix calculations happen at once and can't be recycled when used in a model function. 
+- For very *wide* data sets, the formula method can be extremely inefficient.
+- There are limited *roles* that variables can take which has led to several re-impementations of formulas.
+- Specifyng multivarite outcomes
+- Not all model functions have a formula method.
+
+### Specifying model without formulas
+Some modeling function have the non-formula interface. This usually has arguments for the predictors and the outcome(s):
+```r
+# Usually, the variable must all be numeric
+
+pre_vars <- c("Year_Sold","Longitude","Latitude")
+foo(x=ames_train[,pre_vars],
+    y=ames_train$Sale_Price)
+```
+
+This is inconvenient if you have transformations, factor variables, interactions or any other operations apply prior to modeling. 
+
+Overall, it is difficult to predict if a package has one or both of these interfaces. For example, `lm` only has formulas. 
+
+There is a **third interface** using *recipes* that will be discussed later that solve some of these issues.
+
+### A linear regression model
+Let's start by fitting an ordinary linear regression model to the training set. You can choose the model terms for your model but I will use a very simple model:
+```{r}
+head(ames_train)
+
+
+simple_lm <- lm(log10(Sale_Price)~Longitude+Latitude, data=ames_train)
+```
+
+Before looking at coefficients, we should do some model checking to see if there is anything obviously wrong with the model.
+
+To get the statistics on the individual points, we willl use the awesome `broom` package:
+```{r}
+library(broom)
+library(magrittr)
+
+simple_lm_values <- augment(simple_lm)
+simple_lm_values %>% names()
+```
+
+### Hands-on: some basic diagnostics
+From these results, let's do some visualizations:
+
+- Plot the observed versus fitted values
+- Plot the residuals
+- Plot the predicted versus resdiduals
+
+Are there any downsides to this approach?
+
+## Model evaluation
+### Overall model statistics
+If you use the `summary` method on the `lm` object, the buttom shows some statistics.
+```{r}
+summary(simple_lm)
+```
+
+These statistics are the result of predicting the same data that was used to derive the coefficients. This is problematic because it can lead to optimistic results, especially for models that are extremely flexibile. 
+
+The test set is used for assessing performance. **Should we predict the test set** and use those results to estimate these statistics. 
+
+**NOPE!**
+
+### Assessing models
+Save the test set until the very end when you have one or two models that are your favorite. We'll need to use the training set but...
+
+For some models, it is possible to get very small residuals by predicting the training set. That's an issue since we will need to make comparisons between models, create diagnostic plots, etc. 
+
+If only we had a method for getting honest performance estimates from the training set..
+
+### Resampling methods
+
+There are additional data splitting schemes that are applied to *training set*. They attempt to stimulate slightly different versions of the traing set. These versions of the original are split into two model subsets. 
+
+- The analysis set is used to fit the model (analogous to the training set)
+- Performance is determined using the assessment set.
+
+This process is repated many times. There are different flavors or resampling but we will focus on two methods.
 
 
 
+### V-Fold Cross-validation
+
+```{r}
+knitr::include_graphics("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/Applied ML/resampling methods.PNG")
+```
+
+These are additonal data splitting that are applied to the *training* set.
+They attempt to simpuate slightly different versions of the *training* set. These versions of the oroginal are split into two model subsets. 
+- The *analysis* set ised o fit the model (analogous to the training set)
+- Peformance is determined using the *assessment* set.
+
+This process is repeated many times.
+
+There are different flavors or resampling but we will focus on two methods.
+
+### V-Fold Cross Validation
+Here, we randomly split the training data into V distinct blocks of roughly equal size. 
+- We leave out the first block of analysis data and fit a model.
+- This model is used to predict the held-out block of assessment data.
+- We continue this process until we've predicted all V assessment blocks.
+
+The final performance is based on the hold-out predictions by *averaging* the statistics from the V blocks. V is usually taken to be 5 or 10 and leave one out cross-validation has each sample as a block.
+
+### 10-Fold Cross-Validation with n=50
+```{r}
+knitr::include_graphics("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/Applied ML/cv-plot-1.png")
+```
+
+### Bootstrapping
+A **boostrap sample** is the same size as the training set but each data point is selected with replacement. 
+
+This means that the analysis set will have more than one replicate of a training set instance. 
+
+The assessment set contains all samples that were never included in the bootstrap set. It is often called the out-of-bag sample and can vary in size. 
+
+On average, 63.1220559% of the training set is contained at least once in the bootstrap sample.
+
+```{r}
+knitr::include_graphics("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/Applied ML/boot-plot-1.png")
+```
+
+### Comparing Resampling methods
+
+If you think of resampling in the same manner as statistical estimators (e.g., maximum likelihood), this becomes a trade-off bias and variance:
+
+- variance is (mostly) driven by the number of resamples (e.g., 5-fold CV larger variance than 10-folds).
+- Bias is (mostly) related to how much data is held back. The bootstrap has large bias compared to 10-fold CV. 
+
+There are length blog posts about this subject [here](http://appliedpredictivemodeling.com/blog/2014/11/27/vpuig01pqbklmi72b8lcl3ij5hj2qm) and [here](http://appliedpredictivemodeling.com/blog/2014/11/27/08ks7leh0zof45zpf5vqe56d1sahb0).
+
+I tend to favor 5 repeats of 10-fold cross-validation unless the size of the assessment data is "large enough".
+
+For example, 10% of the Ames training set is 219 properties and this is probably good enough to estimate the $RMSE$ and $R^2$.
+
+### Cross-validating using `rsample`
+```{r}
+library(AmesHousing)
+library(rsample)
+
+set.seed(2433)
+cv_splits <- vfold_cv(ames_train, v=10, strata="Sale_Price")
+cv_splits
+```
+
+The `split` objects contain the information about the sample size.
+```{r}
+cv_splits$splits[[1]]
+```
+
+We use the `analysis` and `assessment` functions to get the data.
+```{r}
+analysis(cv_splits$splits[[1]]) %>% dim()
+
+assessment(cv_splits$splits[[1]]) %>% dim()
+```
+
+### Resampling the linear model
+We Will need to write a function to fit the model to each data set and another to compute performance. 
+```{r}
+library(yardstick)
+
+lm_fit <- function(data_split, ...){
+  lm(..., data=analysis(data_split))}
+
+# A formula is also needed for each model:
+form <- as.formula(
+  log10(Sale_Price)~Longitude+Latitude)
+```
+
+For performance, the first argument should the `rsplit` objected contained in `cv_splits$splits:`
+
+```{r}
+
+model_perf <- function(data_split, mod_obj) {
+  vars <- rsample::form_pred(mod_obj$terms)
+  assess_dat <- assessment(data_split) %>%
+      select(!!!vars, Sale_Price) %>%
+      mutate(
+          pred = predict(
+              mod_obj, 
+              newdata = assessment(data_split)
+          ),
+          Sale_Price = log10(Sale_Price)
+      )
+  rmse <- assess_dat %>% 
+      rmse(truth = Sale_Price, estimate = pred)
+  rsq <- assess_dat %>% 
+      rsq(truth = Sale_Price, estimate = pred)
+  data.frame(rmse = rmse, rsq = rsq)
+}
 
 
+```
+
+### Resamling the linear model
+
+The `purrr` package will be used to fit the model to each analysis set. There will be saved in a column called `lm_mod`:
+```{r}
+library(purrr)
+
+cv_splits <- cv_splits %>% 
+  mutate(lm_mod=map(splits, lm_fit, formula=form))
+cv_splits
+```
+
+### Resampling the linear model (cont.)
+Now, let's compute the two performance measures:
+```{r}
+# map2 can be used to move over two objects of equal length
+
+library(dplyr)
+lm_res <- map2_df(cv_splits$splits, cv_splits$lm_mod, model_perf) %>% 
+  dplyr::rename(rmse_simple=rmse, rsq_simple=rsq)
+
+lm_res %>% head()
+
+```
+
+```{r}
+# Merge in results:
+cv_splits <- cv_splits %>% bind_cols(lm_res)
+
+# Rename the columns and compute the resampling estimates:
+cv_splits %>% select(rmse_simple, rsq_simple) %>% colMeans
+
+```
+
+### What was the ruckus?
+Previously, I mentioned that the performance metrics that were naively calculated from the training set could be optimistic. However, this approach estimates the RMSE to be 0.1614, and cross-validation produced an estimate of 0.1613. What was trhe big deal?
+
+Linear regression is a high bias model. This means that it is fairly incapable at beign able to adpt the underlying model function (unless it is linear). For this reason, linear regression is unlikely to overfit to the training set and our two estimates are likely to be the same.
+
+We'll consider another model shortly that is low bias since it can, theoretically, easily adapt to a wide variety of true model functions.
 
 
+However, as before, there is also variance to consider. Linear regression is very stable since it leverages all of the data points to estimate parameters. Other methods, such as tree-based models, are not and can drastically change if the training set data is slightly perturbed.
 
+tl;dr: the earlier concern is real but linear regression is less likely to be affected.
+
+### Diagnostics Again
+Now let's look at diagnostics using the predictions from the assessment sets.
+```{r}
+get_assessment <- function(splits, model)
+  augment(model, newdata=assessment(splits)) %>% 
+  mutate(.resid=log10(Sale_Price)-.fitted)
+
+holdout_results <- map2_df(cv_splits$splits, cv_splits$lm_mod, get_assessment)
+holdout_results %>% dim()
+```
+
+```{r}
+ames_train %>% dim()
+```
+
+### Hands-on partial residual plots
+A partial residual plot is used to diagnose what variables should have been in the model.We can plot the hold-out residuals versus different variables to understand if they should have been in the model
+- If the residuals have no pattern in the data, they are likely to be irrelevant.
+- If a pattern is seen, it suggests that the variable should have been in the model.
+
+Take 10 min and use `ggplot` to investigate other predictors using the `holdout_results` data frame. `geom_smooth` might come in handy.
+
+## Tuning parameters and overfitting
+### K-Nearest Neighbors Model
+
+Now let's consider a more flexible model that is low bas: K-nearest neighbors.The model stores the training set(including the outcome). When a new sample is predicted, $K$ training set points are found that are most similar to the new sample being predicted.
+
+The predicted value for the new sample is some summary statistic of the neighbors, usually:
+- the mean for regression, or
+- the mode for classification
+
+When $K$ is small, the model might be too responsive to underlying data. When $K$ is large, it begins to "oversmooth" the neighbors and performance suffers.
+
+Ordinary, since we are computing a **distance**, we would want to center and scale the predictors. Our two predictors are already on the same scale so we can skip this step.
+
+Consider the 2-nearest neighbor model. Would there be a difference in the estimated model performance between re-prediction and cross-validation?
+
+`caret` has a `knnreg` function that can be used (the `kknn` package is another option). IT has a formula method and we'll use this to illustrate the model:
+```{r}
+library(caret)
+
+knn_train_mod <- knnreg(log10(Sale_Price)~Longitude+Latitude,
+                        data=ames_train,
+                        k=2)
+
+repredict <- data.frame(price=log10(ames_train$Sale_Price)) %>% 
+  mutate(pred=predict(knn_train_mod, newdata=ames_train %>% select(Longitude,Latitude)
+                      )
+         )
+
+repredict %>% rsq(truth = "price", estimate = "pred") # <- the ruckus is here
+# 0.892872
+```
+
+Thats pretty good, but are we tricking ourselves? One of those two neighbors is always itself. To resample, let's create another function to fit this model and follow the same resampling process as before:
+```{r}
+knn_fit <- function(data_split,...)
+  knnreg(..., data=analysis(data_split))
+
+cv_splits <- cv_splits %>% 
+  mutate(knn_mod=map(splits, knn_fit, formula=form, k=2))
+
+knn_res <- map2_df(cv_splits$splits, cv_splits$knn_mod, model_perf) %>% 
+  rename(rmse_knn=rmse, rsq_knn=rsq)
+
+# merge in results
+cv_splits <- cv_splits %>% bind_cols(knn_res)
+
+colMeans(knn_res)
+```
+
+### Making formal comparisons
+The model appears to be a drastic improvement over simple linear regression, but we are definitely getting highly optimistic results by re-predicting the training set.
+
+We can try to make a more formal assesment of the two current models. Both models used the same resamples, so we have 10 estimates of performance that are matched. Does the matching mean anything? 
+
+Most likely **YES**. It is very common to see that there is a resample effect. Similar to repeated measures designs, we can expect a relationship between models and resamples. For example, some resamples will have the worst performance over different models and so on. 
+
+In other words, there is usually a within-resample correlation. For the two models, the estimated correlation in RMSE values is 0.85.
+
+### The resample effect
+```{r}
+rs_comp <- data.frame(
+	rmse = c(cv_splits$rmse_simple, cv_splits$rmse_knn),
+	Model = rep(c("Linear\nRegression", "2-NN"), each = nrow(cv_splits)),
+	Resample = cv_splits$id
+)
+
+rs_comp
+
+ggplot(rs_comp, aes(x = Model, y = rmse, group = Resample, col = Resample)) + 
+  geom_point() + 
+  geom_line() + 
+  theme(legend.position = "none")
+
+```
+
+### Model comparison accounting for resampling
+With only two models, a paired t-test can be used to estimate the difference in RMSe between the models:
+```{r}
+t.test(cv_splits$rmse_simple, cv_splits$rmse_knn, paired=TRUE)
+```
+
+Hothorn et al (2012) is the [original paper](https://scholar.google.com/scholar?hl=en&q=analysis+of+benchmark+experiments&btnG=&as_sdt=1%2C7&as_sdtp=) on comparing models using resampling.
+
+We'll do more extensive analyses with tidyposterior soon.
+
+### Overfitting
+
+Overfitting occurs when a model inappropriately pick up on trends in the training set that do not generalize to new samples. When this occurs, assesment of the model based on the training set can show good performance that does not reproduce in future samples.
+
+Some models have specific "knobs" to control over-fitting
+- neighborhood size in nearest neighbor models is an example
+- the number of splits in a tree model
+
+often poor choices for these parameters can result in overfitting
+
+For example, the next slide shows a data set with two predictors. We want to be able to produce a line (i.e., decision boundary) that differentiates two classes of data.
+
+### Two class example,
+On the next slide, two classification boundaries are shown for a different model type not yet discussed. The differece in the two panes is solely due to different choices in tuning parameters. One overfits the training data. 
+```{r}
+knitr::include_graphics("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/Applied ML/two-class-overfit-1.png")
+```
+
+We usually don't have two-dimensional data so a quantitative method for under measureing overfitting is needed. **Resampling** fits that description. A simple method for tuning a model is used to grid search:
+
+├── Create a set of candidate tuning parameter values
+└── For each resample
+│   ├── Split the data into analysis and assessment sets
+│   ├── [preprocess data]
+│   ├── For each tuning parameter value
+│   │   ├── Fit the model using the analysis set
+│   │   └── Compute the performance on the assessment set and save 
+├── For each tuning parameter value, average the performance over resamples
+├── Determine the best tuning parameter value
+└── Create the final model with the optimal parameter(s) on the training set
+
+**Random search** is a similar technique where the candidate set of parameter values are simulated at random across a wide range. Also, an example of nested resampling can be found [here](http://appliedpredictivemodeling.com/blog/2017/9/2/njdc83d01pzysvvlgik02t5qnaljnd).
+
+### Grid search computations
+
+The bad news is that all of the models (except the final model) are discared. However, as the good news, all of the models (except the final model) can be run in parallel. Let's look at the Ames K-NN model and evaluate $K=1,2,\dot,20$ using the same 10-fold cross-validation as before. 
+
+We'll start coding this algorithm from the inside out.
+
+These steps are:
+ ├── Fit the model using the analysis set 
+   └── Compute the performance on the assessment set and save  
+
+`split` will be the one of elements of `cv_splits$splits`.
+```{r}
+knn_rmse <- function(k, split) {
+    mod <- knnreg(log10(Sale_Price) ~ Longitude + Latitude, 
+                                data = analysis(split),  
+                                k = k)
+    # Extract the names of the predictors
+    preds <- form_pred(mod$terms)
+    data.frame(Sale_Price = log10(assessment(split)$Sale_Price)) %>%
+        mutate(pred = predict(mod, assessment(split) %>% select(!!!preds))) %>%
+        rmse(Sale_Price, pred)
+}
+```
+
+### Fit the model across values of K
+
+│   ├── For each tuning parameter value 
+│   │   └── Run `knn_rmse` 
+
+```{r}
+knn_grid <- function(split) {
+    # Create grid
+  tibble(k = 1:20) %>%
+    # Execute grid for this resample
+    mutate(
+      rmse = map_dbl(k, knn_rmse, split = split),
+      # Attach the resample indicators using `lables`
+      id = labels(split)[[1]]
+    )
+}
+```
+
+The return values here is a tibble with columns for *k*, the *RMSE*, and the fold ID (e.g., `Fold01`).
+
+### Top-level iteration over resamples
+
+└── For each resample 
+│   └── Run `knn_grid` 
+
+Here, `resamp` is the resample object `cv_splits`
+```{r}
+iter_over_resamples <- 
+    function(resamp) 
+        map_df(resamp$splits, knn_grid)
+```
+
+### Running the code
+```{r}
+library(rsample)
+knn_tune_res <- iter_over_resamples(cv_splits)
+knn_tune_res %>% head(15)
+```
+
+### The performance profile
+To summarize the results for each value of $K$:
+```{r}
+library(tidyverse)
+
+rmse_by_k <- knn_tune_res %>% 
+  group_by(k) %>% 
+  summarize(rmse=mean(rmse))
+
+ggplot(rmse_by_k, aes(x=k, y=rmse))+
+  geom_point()+geom_line()
+```
+
+Although it is numerically optimal, we are not required to use a value of 4 neighbors for the final model.
+
+### Resampling variation
+
+How stable is this? We can also plot the individual curves and their minimums.
+```{r}
+
+```
 
 
 
