@@ -182,9 +182,6 @@ ames <- read_delim("http://bit.ly/2whgsQM", delim = "\t") %>%
 ```
 
 ```{r}
-
-library()
-
 ames <- ames_raw %>% 
   rename_at(vars(contains(' ')), funs(gsub(' ', '_', .))) %>%
   rename(Sale_Price=SalePrice) %>% 
@@ -764,11 +761,11 @@ We usually don't have two-dimensional data so a quantitative method for under me
 
 ├── Create a set of candidate tuning parameter values
 └── For each resample
-│   ├── Split the data into analysis and assessment sets
-│   ├── [preprocess data]
-│   ├── For each tuning parameter value
-│   │   ├── Fit the model using the analysis set
-│   │   └── Compute the performance on the assessment set and save 
+???   ├── Split the data into analysis and assessment sets
+???   ├── [preprocess data]
+???   ├── For each tuning parameter value
+???   ???   ├── Fit the model using the analysis set
+???   ???   └── Compute the performance on the assessment set and save 
 ├── For each tuning parameter value, average the performance over resamples
 ├── Determine the best tuning parameter value
 └── Create the final model with the optimal parameter(s) on the training set
@@ -801,8 +798,8 @@ knn_rmse <- function(k, split) {
 
 ### Fit the model across values of K
 
-│   ├── For each tuning parameter value 
-│   │   └── Run `knn_rmse` 
+???   ├── For each tuning parameter value 
+???   ???   └── Run `knn_rmse` 
 
 ```{r}
 knn_grid <- function(split) {
@@ -822,7 +819,7 @@ The return values here is a tibble with columns for *k*, the *RMSE*, and the fol
 ### Top-level iteration over resamples
 
 └── For each resample 
-│   └── Run `knn_grid` 
+???   └── Run `knn_grid` 
 
 Here, `resamp` is the resample object `cv_splits`
 ```{r}
@@ -857,8 +854,501 @@ Although it is numerically optimal, we are not required to use a value of 4 neig
 
 How stable is this? We can also plot the individual curves and their minimums.
 ```{r}
+best_k <- knn_tune_res %>% 
+  group_by(id) %>% 
+  summarize(k=k[which.min(rmse)],
+            rmse=rmse[which.min(rmse)])
+
+ggplot(rmse_by_k, aes(x=k, y=rmse))+
+  geom_point()+
+  geom_line()+
+  geom_line(data=knn_tune_res,
+            aes(group=id, col=id),
+            alpha=0.2,lwd=1)+
+  geom_point(data=best_k,
+             aes(col=id),
+             alpha=0.5, cex=2)+
+  theme(legend.position = "none")
 
 ```
+
+### The next Steps
+At this point, we would decide on a good value for $K$ and then fit the model used going foward:
+```{r}
+final_knn <- knnreg(log10(Sale_Price)~Longitude+Latitude,
+                    data=ames_train,
+                    k=4)
+```
+
+To reiterate: the previous 200 models created during the grid search are not used once K is set. Later, we will look at the high-level API in `caret` that stremalines almost all of this process for different models.
+
+## Part3: Feature engineering and preprocessing
+
+### Preprocessing and feature engineering
+This part mostly concerns what we can do to do our variables to make the models more effective., which is related to the predictors. Operations that we might use are:
+- transformations of individual predictors or groups of variables,
+- alternate encodings of a variable,
+- elimination of predictors(unsupervised) etc.
+
+In statistics, this is generally called `preprocessing` the data. As usual, the computer science side of modeling has a much flashier name: **feature engineering**.
+
+### Reasons for modifying the data
+
+Some models(KNN, SVMs, PLS, neural networks) require that the predictors variables have the same unit: **centering**, **scaling** the predictors can be used for this purpose.
+
+Other models are very sensitive to correlations between the predictors and **filters** or **PCA signal extraction** can improve the model.
+
+As we'll see an example, changing the scale of predictors using a **transformation** can lead to a big improvement. In other cases, the data can be encoded **encoded** in a way that maximizes its effect on the model. Representing the data as the day of or the week can be effective for modeling public transportation data.
+
+Many models cannot cope with missing data so **imputation** strategies might be necessary. Development of new *features* that represent something important to the outcome (e,g,m compute distances to public transportation, university buildings, public schools etc.).
+
+### A bivariate example
+The plot on the right side shows two predictors from a real *test* set where the object is to predict two classes. The predictors are strongly correlated and each has a right skewed distribution. There appeas to be some class separation but only in the bivariate plot: the individual predictors show poor discrimination of the classes.
+
+Some models might be sensitive to highly correalted and/or skewed predictors. Is there something that we can do to make the predictors easier for the model to use?
+
+```{r}
+knitr::include_graphics("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/Applied ML/bivariate-plot-natural-1.PNG")
+```
+
+
+We might start by estimating transformations of the predictors to resolve the skewness. The **Box-Cox transformation** is a family of transformations originally designed for the outcomes of models. We can use it here for the predictors. 
+
+It uses the data to estimate a wide variety of transformations including the inverse, log, sqrt and polynomial functions. Using each factor in isolation, both predictors were determined to need **inverse transformation** (approximately). The figure on th right shows the data after these transformations have been applied. A logistic regression model shows a substantial improvement in classifying using the altered data.
+```{r}
+knitr::include_graphics("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/Applied ML/bivariate-plot-inverse-1.PNG")
+```
+
+
+### Resampling and preprocessing
+It is important to realize that almost all preprocessing steps that involve estimation sohuld be bundled inside of the resampling process so that the performance estimates are not biased.
+
+- **Bad**: preprocess the data, resample the model
+- **Good**: resample the processing and modeling
+
+Also, 
+- avoid information *leakage* by having all operations in the modeling process occur only on the training set.
+- Do not reestimate anything on the test set. For example, to center new data, the training set mean is used.
+
+
+## Preprocessing categorical predictors
+### Dummy variables
+
+One common procedure for modeling is to create numeric representations of categorical data. This is usually done via *dummy variables*: a set of binary 0/1 variables for different levels of an R factor.
+
+For example, the Ames housing data contains a predictor called `Alley` with levels: `Gravel`; `No_Alley_Access`; `Paved`. Most dummy variable procedure would make two numeric variables from this predictor that are zero for a level and one otherwise. 
+
+Data              Dummy variables
+                  No_Alley_Access Paved
+Gravel            0               0
+No_Alley_Access   1               0  
+Paved             0               1
+
+
+If there are $C$ levels of the factor, only $C-1$ dummy variables are created since the last can be infered from the others. There are different contrast schemes for creating the new variables. 
+
+For ordered factors, *polynnomial* contrasts are used. See this [blog post](http://appliedpredictivemodeling.com/blog/2013/10/23/the-basics-of-encoding-categorical-data-for-predictive-models). 
+
+
+How do you create them in R?
+
+The formula method does this for you. Otherwise, the traditional method is to use the `model.matrix` function to create a matrix. However, there are some caveats to this tha can make things difficult. We'll show another method for making them shortly.
+
+* Almost always at least. Tree- and rule-based model functions do not. Example are `randomforest::randomForest`, `ranger::ranger`, `rpart::rpart`, `C50::C5.0`, `Cubist::cubist`, `klaR::NaiveBayes`. 
+
+
+### Infrequent levels in categorical factors
+One issue is what happens when there are very few values of a level? Consider the Ames training set and the `Neighborhood` variable. If these data are resampled, what would happen to Landmark and similar locations when dummy variables are created?
+
+A $zero-$ variance predictor that has only a single value (zero) would be the result. For many models (e.g., linear/logistic regression, etc.) would find this numerically problematic and issue a warining and `NA` values for that coefficient. Trees and similar models would not notice. 
+
+There are two main approaches to dealing with this:  
+
+1) Run a filter on the training set predictors prior to running the model and remove the zero-variance predictors
+2)  Recode the factor so that infrequently occuring predictors (and possibly new values) are pooled into an "other" category.
+
+However, `model.matrix` and the formula method are incapable of doing either of these.
+
+### Recipes 
+**Recipes** are an alternative method for creating the data frame of predictors for a model. They allow for a sequence of steps that define how data should be handled. Recall that previous part where we used the formula `log10(Sale_Price) ~ Longitude + Latitude`? These steps are:
+
+1) Assign `Sale_Price` to be the outcome
+2) Assign `Longitude` and `Latitude` are predictors
+3) Log transform the outcome
+
+To start using a recipe, the these steps can be done using
+```{r}
+library(recipes)
+
+mod_rec <- recipe(Sale_Price ~ Longitude + Latitude, data=ames_train) %>% 
+  step_log(Sale_Price, base=10)
+
+```
+
+This creates the recipe for data preprocessing (but does not execute it yet)/
+
+### Recipes and categorical predictors
+
+To deal with the dummy variable issue, we can expand the recipe with more steps:
+```{r}
+
+mod_rec <- recipe(Sale_Price ~ Longitude + Latitude+Neighborhood, data=ames_train) %>% 
+  step_log(Sale_Price, base=10) %>% 
+  
+  # Lump factor levels that occur in <=5% of data as "others"
+  step_other(Neighborhood, threshold=0.05) %>% 
+  
+  # create dummy variables for _any_ factor variables
+  step_dummy(all_nominal())
+
+mod_rec
+```
+
+### Preparing the recipe
+
+Now that we have a preprocessing *specification*, let's run it on the training set to *prepare* the recipe: 
+```{r}
+mod_rec_trained <- prep(mod_rec, training=ames_train, retain=T, verbose=T)
+```
+
+Here, the `training` is to determine which factors to pool and to enumerate the factor levels of the `Neighborhood` variable, `retain` keeps the processed varion of the training set around so we don't have to recompute it.
+```{r}
+mod_rec_trained
+```
+
+### Getting the values
+Once the recipe is prepared, it can be applied to any data set using `bake`:
+```{r}
+ames_test_dummies <- bake(mod_rec_trained, newdata=ames_test)
+names(ames_test_dummies)
+```
+
+If `retain = TRUE` the training set does not need to be "rebaked". The `juice` function can return the processed verion of the training data. Selection can be used with `bake` and the default is `everything`
+
+
+### Hands-on: zero-variance filter
+
+Instead of using `step_other`, take 10 minutes and research how to eliminate any zero-variance predictors using the `recipe` [reference site](https://topepo.github.io/recipes/reference/index.html). 
+
+Re-run the recipe with this step. What were the results? Do you prefer either of these approaches to the other?
+
+## Interaction effects
+### Interactions
+
+An interaction between two predictors indicates that the relationship between the predictors and the outcome cannnot be described using only one of the variables.For example, let's look at the relationship between the price of a house and the year in which it was built. The relationship appears to be slightly nonlinear, possible quadratic. 
+
+```{r}
+library(ggplot2)
+
+price_breaks <- (1:6)*(10^5)
+
+ggplot(ames_train, 
+       aes(x = Year_Built, y = Sale_Price))+
+  geom_point(alpha = 0.4) +
+  scale_x_log10() + 
+  scale_y_continuous(breaks = price_breakes,
+                     trans = "log10")+
+  geom_smooth(method = "loess")
+```
+
+### Interactions
+
+However, what if we separate this trend based on whether the property has air conditioning (93.4% of the training set) or not (6.6%).
+```{r}
+library(MASS)
+# To get rubust linear regression model
+
+ggplot(ames_train,
+       aes(x=Year_Built,
+           y=Sale_Price))+
+  geom_point(alpha=0.4)+
+  scale_y_continuous(breaks=price_breaks,
+                     trans="log10")+
+  facet_wrap(~Central_Air, nrow=2)+
+  geom_smooth(method="rlm")
+```
+
+### Interactions
+
+It appears as though the relationship between the year built and the sale price is somewhat different for the two groups. 
+
+- When there is no AC, the trend as perhaps flat or slightly decreasing
+- With AC, there is a linear trend or is perhaps slightly quadratic with some outliers at the low end.
+
+```{r}
+mod1 <- lm(log10(Sale_Price)~Year_Built+Central_Air, data=ames_train)
+mod2 <- lm(log10(Sale_Price)~Year_Built+Central_Air+Year_Built:Central_Air, data=ames_train)
+
+anova(mod1, mod2)
+```
+
+### Interactions in Recipes
+We first create the dummy variables for the qualitative predictor (`Central_Air`) then use a formula to create the interaction using the **:** operator in addition step:
+
+```{r}
+recipe(Sale_Price ~ Year_Built+Central_Air, data=ames_train) %>% 
+  step_log(Sale_Price) %>% 
+  step_dummy(Central_Air) %>% 
+  step_interact(~starts_with("Central_Air"):Year_Built) %>% 
+  prep(training=ames_train, retain=T) %>% 
+  juice %>% 
+  # select a few rows with different values
+  slice(153:157)
+```
+
+## Adding Recipes to our `rsample` worflows
+### recipes and rsample
+
+Let's got back to the Ames housing data and work on building models with `recipes` using code similar to the previous set of notes. Previously:
+```{r}
+library(AmesHousing)
+ames <- make_ames()
+
+library(rsample)
+set.seed(4595)
+
+data_split <- initial_split(ames,strata="Sale_Price")
+ames_train <- training(data_split)
+
+set.seed(2453)
+cv_splits <- vfold_cv(ames_train, v=10, strata="Sale_Price")
+
+```
+
+### Linear models again
+
+Let's add a few extra predictors and some preprocessing
+- Two numeric predictors are very skewed and could use a transformation(`Lot_Area` and `Gr_Liv_Area`). 
+- We'll add neighborhood in as well and a few other house features.
+- The K-NN model suggests that the coordinates can be helpful but probably require a nonlinear representation. We can add thewse using **B-splines** with 5 degrees of freedom. To evaluate this, we will create two versions of the recipe to evaluate this hypothesis.
+
+```{r}
+lin_coords <- recipe(Sale_Price ~ Bldg_Type + Neighborhood+Year_Built+
+                       Gr_Liv_Area + Full_Bath + Year_Sold + Lot_Area+
+                       Central_Air + Longitude + Latitude,
+                     data=ames_train) %>% 
+  step_log(Sale_Price, base=10) %>% 
+  step_YeoJohnson(Lot_Area, Gr_Liv_Area) %>% 
+  step_other(Neighborhood, threshold = 0.05) %>% 
+  step_dummy(all_nominal()) %>% 
+  step_interact(~starts_with("Central_Air"):Year_Built)
+
+coords <- lin_coords %>% 
+  step_bs(Longitude, Latitude, options=list(df=5))
+```
+
+### Longitude
+```{r}
+library(ggplot2)
+
+ggplot(ames_train,
+       aes(x=Longitude, y=Sale_Price))+
+  geom_point(alpha=.5)+
+  geom_smooth(
+    method="lm",
+    formula=y~splines::bs(x,5),
+    se=FALSE)+
+  scale_y_log10()
+```
+
+Splines add non-linear versions of the predictor to a linear model to create smooth and flexible relationships between the predictor and outcome. This "basis expansion" technique will be seen against in the regression section of the workshop.
+
+### Latitude
+```{r}
+ggplot(ames_train,
+       aes(x=Latitude, y=Sale_Price))+
+  geom_point(alpha=.5)+
+  geom_smooth(
+    method="lm",
+    formula=y~splines::bs(x,5 ),
+    se=FALSE
+  )+
+  scale_y_log10()
+```
+
+### Preparing the Recipes
+
+Our first step is the run `prep()` on the `coords` recipe but using each of the analysis sets. `rsample()` has a function that is a wrapper around `prep()` that can be used to map over the split objects.
+```{r}
+rsample::prepper
+```
+
+```{r}
+library(purrr)
+
+cv_splits <- cv_splits %>% 
+  mutate(coords = map(splits, prepper, recipe = coords, retain = TRUE))
+```
+
+### Fitting the models
+We can use code that is very similar to the previous section. This corde will use the recipe object to get the data. Since each analysis set is used to train the recipe, our previous use of `retain=TRUE` means that the processed version of the data is withing the recipe.
+
+This can be returned via the `juice` function.
+
+```{r}
+lm_fit_rec <- function(rec_obj, ...) 
+  lm(..., data = juice(rec_obj))
+cv_splits <- cv_splits %>% 
+  mutate(fits = map(coords, lm_fit_rec, Sale_Price ~ .))
+
+cv_splits
+glance(cv_splits$fits[[1]])
+```
+
+### Predicting the assessment set
+
+This is alittle more complex. We need three elements contained in our tibble:
+- the split object (to get the assessment data)
+- the recipe object (to process the data)
+- the linear model(for predictions)
+
+The function is not too bad:
+```{r}
+assess_predictions <- function(split_obj, rec_obj, mod_obj){
+  raw_data <- rsample::assessment(split_obj)
+  proc_x <- bake(rec_obj, newdata=raw_data, all_predictors())
+  # now save all of the columns and add predictions
+  bake(rec_obj, newdata=raw_data, everything()) %>% 
+    mutate(
+      .fitted=predict(mod_obj, newdata=proc_x),
+      .resid=Sale_Price - .fitted, # Sale_Price is already logged by the recipe
+    # Save the original row number of the data
+      .row=as.integer(split_obj, data="assessment")
+      )
+}
+```
+
+Since we have three inputs, we will use `purrr`'s `pmap` function to walk along all three columns in the tibble.
+```{r}
+cv_splits <- cv_splits %>%
+  mutate(
+    pred = 
+      pmap(
+        lst(split_obj = cv_splits$splits, rec_obj = cv_splits$coords, mod_obj = cv_splits$fits),
+        assess_predictions 
+      )
+  )
+```
+
+We do get soem warnings that the assessment data are outside the range of the analysis set values:
+
+`yardstick::metric` will compute a small set of summary statistics for metrics model based on the type of outcome (e.g., regression, classification, etc.)
+```{r}
+library(yardstick)
+# compute the summary stats
+purrr::map_df(cv_splits$pred, metrics, truth=Sale_Price, estimate=.fitted) %>% 
+  colMeans
+```
+
+These results are better than our K-NN model but "the only way to be comfortable with your results is to never look at them"
+
+### Graphical checks for fit
+```{r}
+assess_pred <- bind_rows(cv_splits$pred) %>% 
+  mutate(Sale_Price=10^Sale_Price,
+         .fitted=10^.fitted)
+
+ggplot(assess_pred,
+       aes(Sale_Price, .fitted))+
+  geom_abline(lty=2)+
+  geom_point(alpha=.5)+
+  geom_smooth(se=FALSE, col="red")
+```
+
+The current model is 
+- drastically *over*-predicting the price of three houses
+- significantly *under*-predicting the price of a number of expensive houses
+
+What would we do next?
+
+1. Try to understand the two big residuals. Are these aberrant houses or does this have something to do with our model? Maybe those extrapolation warning?
+2. Find more predictors that differentiate the more expensive houses with the others
+3. Try a different model
+
+### About these five houses
+
+From Dmytro Perepolkin via [GitHub/topepo/AmesHousing](https://github.com/topepo/AmesHousing/issues/2#issuecomment-351005269): I did a little bit of research on Kaggle regarding those  ve houses (three "partial sale" houses in Edwardsand two upscale in Northridge):
+
+In fact all three of Edwards properties were sold within three months by the same company. The
+lots are located next to each other in Cochrane Pkwy Ames, IA. I guess the story was that
+developer was either in trouble or wanted to boost sales, so they were signing sales contracts
+on half- nished houses in a new development area at a deep discount. Those few houses are
+likely to have been built  rst out of the whole residential block that followed.
+Two of the upscale houses in Northridge (sold at 745 and 755 thousand, respectively) are located next to each other. Houses are, of course, eyecandies (at least to my taste). They are outliers with regards to size in their own neighborhoods!
+
+Sometimes it really pays off to be a [forensic statistician](https://projecteuclid.org/euclid.aoas/1267453942).
+
+# Regression modeling
+- Example data
+- Regularized linear models
+- Multiavariate Adaptive Regression Splines (MARS)
+- Ensembles of MARS models
+- Model comparison via Bayesian analysis
+
+## Example data
+### Expanded car MPG data
+The data that are used here are an extended version of the ubiquitous `mtcars` data set.
+
+[fueleconomy.gov](https://www.fueleconomy.gov/feg/download.shtml) was used to obtain fuel efficiency data on cars from 2015-2018. 
+
+Over this time range, duplicate ratings were eliminated; these occur when the same car is sold for several years in a row. As a result, there are 3294 cars that are listed in the data. The predictors include the automaker and additional information about the cars (e.g., intake valves per cycle, asipration method etc.).
+
+In our analysis, the data from 2015-2017 are used for training to see if we can predict the 609 cars that were new in 2018.
+```{r}
+
+library(readr)
+cars <- read_csv("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/Applied ML/vehicles.csv",col_names = TRUE)
+
+library(dplyr)
+
+# train data
+car_train <- cars %>% 
+  filter(year<2018)
+head(car_train)
+
+# test data
+car_test <- cars %>% 
+  filter(year==2018)
+```
+
+### Some acronyms and codes 
+- Drive codes:
+F=2-Wheel Drive, Front
+R=2-Wheel Drive, Rear
+4=4-Wheel Drive
+A=All Wheel Drive
+P=Part-time 4-Wheel Drive
+
+- Fuel;
+DU=Diesel, ultra low sulfur (15 ppm, maximum)
+G=Gasoline (Regular Unleaded Recommended)
+GM=Gasoline (Mid Grade Unleaded Recommended)
+GP=Gasoline (Premium Unleaded Recommended)
+GPR=Gasoline (Premium Unleaded Required)
+
+- Transmission:
+A=Auto(A10)               SA=Auto(S10)
+A=Auto(A4)                SA=Auto(S4)
+A=Auto(A5)                SA=Auto(S5)
+A=Auto(A6)                SA=Auto(S6)
+A=Auto(A7)                SA=Auto(S7)
+A=Auto(A8)                SA=Auto(S8)
+A=Auto(A9)                SA=Auto(S9)
+AM=Auto(AM5)              SCV=Auto(AV-S10)
+AM=Auto(AM6)              SCV=Auto(AV-S6)
+AM=Auto(AM7)              SCV=Auto(AV-S7)
+AM=Auto(AM8)              SCV=Auto(AV-S8)
+AMS=Auto(AM-S6)
+AMS=Auto(AM-S7)
+AMS=Auto(AM-S8)
+AMS=Auto(AM-S9)
+CVT=Auto(AV)
+gM=Manual(M5)
+M=Manual(M6)
+M=Manual(M7)
+
+### Hands-on: explore the car data
+As before, let's take 10 minutes to get familar with the training set using numerical summaries and plots. `geom_smoooth` is very helpful here to discover the nature of relationships between the outcome (`mpg`) abd the potential predictors.
 
 
 
