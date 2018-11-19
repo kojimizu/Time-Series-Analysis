@@ -4,6 +4,8 @@ author: "Koji Mizumura"
 date: ' October 22, 2018'
 always_allow_html: yes
 output:
+  word_document:
+    toc: yes
   html_notebook:
     code_folding: hide
     fig_height: 4.5
@@ -11,8 +13,6 @@ output:
     highlight: tango
     number_sections: yes
     theme: cosmo
-    toc: yes
-  word_document:
     toc: yes
   html_document:
     df_print: paged
@@ -475,7 +475,7 @@ This process is repated many times. There are different flavors or resampling bu
 
 ### V-Fold Cross-validation
 
-```{r}
+```{r }
 knitr::include_graphics("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/Applied ML/resampling methods.PNG")
 ```
 
@@ -1046,7 +1046,7 @@ ggplot(ames_train,
        aes(x = Year_Built, y = Sale_Price))+
   geom_point(alpha = 0.4) +
   scale_x_log10() + 
-  scale_y_continuous(breaks = price_breakes,
+  scale_y_continuous(breaks = price_breaks,
                      trans = "log10")+
   geom_smooth(method = "loess")
 ```
@@ -1295,20 +1295,15 @@ Over this time range, duplicate ratings were eliminated; these occur when the sa
 
 In our analysis, the data from 2015-2017 are used for training to see if we can predict the 609 cars that were new in 2018.
 ```{r}
-
-library(readr)
-cars <- read_csv("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/Applied ML/vehicles.csv",col_names = TRUE)
+cars <- load("C:/Users/kojikm.mizumura/Desktop/Data Science/UseR 2018/Applied ML/car_data.RData")
 
 library(dplyr)
 
 # train data
-car_train <- cars %>% 
-  filter(year<2018)
-head(car_train)
-
-# test data
-car_test <- cars %>% 
-  filter(year==2018)
+car_train <- car_data %>%
+  filter(model_year < 2018)
+car_test <- car_data %>%
+  filter(model_year == 2018)
 ```
 
 ### Some acronyms and codes 
@@ -1349,6 +1344,557 @@ M=Manual(M7)
 
 ### Hands-on: explore the car data
 As before, let's take 10 minutes to get familar with the training set using numerical summaries and plots. `geom_smoooth` is very helpful here to discover the nature of relationships between the outcome (`mpg`) abd the potential predictors.
+
+## Linear models
+### Linear regression analysis
+
+We'll start by fitting linear regression models to these data. As a reminder, the "linear" part means that the model is linear in the _parameters_; we can add nonlinear terms to the model (e.g., x^2 or log(x)) without causing issues.
+
+We could start by using `lm` and the formula method using what we've learnt so far.
+```{r}
+lm <- lm(mpg ~ . -carline + poly(eng_displ, 2), data = car_train)
+summary(lm)
+```
+
+However,
+```{r}
+car_train %>% 
+  group_by(division) %>% 
+  count() %>% 
+  arrange(n) %>% 
+  head(8)
+```
+
+If one of these low occurence car divisions in only in the assessment set, it may cause issues (or errors) in some models.
+
+### Linear regression analysis for the car data
+With __recipes__, variables can have different roles, such as case-weights, cluster, censotring indicator inc. We should keep `carline` in the data so that we can use it to diagnose issues but we don't want it as a predictor. 
+
+The role of this variable will be changed to "car name".
+```{r}
+library(recipes)
+basic_rec <- recipe(mpg ~ ., data = car_train) %>%
+  # keep the car name but don't use as a predictor
+  add_role(carline, new_role = "car name") %>%
+  # collapse some divisions into "other"
+  step_other(division, threshold = 0.005) %>%
+  step_dummy(all_nominal(), -carline) %>%
+  step_zv(all_predictors())
+```
+
+### Potential issues with linear regression
+
+We'll look at the car data and examine a few different models to illustrate some more complex models and approaches to optimizing them. We'll start with linear models.
+
+However, some potential issues with linear methods:
+- They do not automatically do feature selection and including irrelevant predictors may degreade performance
+- Linear models are sensitive to situations where the predictors are highly correlated (aka **collinearity**). This isn't too big of an issue for these data though.
+
+```{r eval=FALSE}
+# column division, carline, car_class has too many classes
+GGally::ggpairs(car_train[,c(-2,-3,-15)])
+```
+
+
+To mitigate these two secnarios, **regularization** will be used. This approach adds a penalty to the regression parameters. In order to have a large slope in the model, the predictor will need to have a large impact on the model. 
+
+There are different types of regularization methods.
+
+### Effect of collenearity
+As an example of collinearity, the `longley` contains economic data. We can try to predict the number of people employed per year as a function of the population size and the nation's gross domestic product (GDP). 
+
+The issue is that the two predictors have a correlation near 1. What happens when we fit models with both ppredictors versus one-at-a-time?
+
+The coefficients can drastically change depending on what is in the model.
+
+### Regularized linear regression
+
+Now suppose we want to see if regularizing the regression coefficients will result in better fits. The `glmnet model` can be used to build a linear model using $L_1$ or $L_2$ regularization (or mixture of the two).
+
+- an $L_1$ penalty (penalty is $\lambda_1 \Sigma|\beta_j|$) can have the effect of setting coefficnets to zero
+- $L_2$ regularization ($\lambda_2 \Sigma\beta_j^2$) is basically the regression where the magnitude of the coefficients are dampered to avoid overfitting
+
+For a `glmnet` model, we need to determine the total amount regularization (called `lambda`) and the mixture of $L_1$ and $L_2$ (called `alpha`).
+- `alpha=1` is a *lasso model* while `alpha=0` is *ridge regression* (aka weight decay)
+
+The predictors require centering and scaling before being used in a `glmnet`, `lasso`, `ridge` regression model.
+
+### Tuning the `glmnet` model
+We have tw otuning parameters now (`alpha` and `lambda`). We can extend our previous grid search approach by creating a 2D grid of parameters to test.
+
+- $alpha$ must be between zero and one. A small grid is used for this parameter.
+- $lambda$ is not as clear-cut. We consider values on the $log_10$ scale. Usuallty values less than one are sufficient but this is not always true.
+
+We can create combinations of these parameters and store them in a data frame.
+```{r}
+glmn_grid <- expand.grid(alpha = seq(0, 1, by = .25), lambda = 10^seq(-3, -1, length = 20))
+nrow(glmn_grid)
+```
+
+Instead of using `rsample` to tune the model, the `train` function in the `caret` package will be introduced.
+
+### Caret
+`caret` was developed to:
+
+- create a unified interface for modeling and predictions to 238 models
+- streamline model tuning using resampling
+- provide a variety of "helper" functions and classes for day-today model building tasks
+- increase computational efficiency using parallel processing
+- enable serveral feature selection frameworks
+
+It was originally developed in 2005 and is still very active. 
+There is an extentisve [github.io](https://topepo.github.io/caret/) page and article in [JSS](http://www.jstatsoft.org/v28/i05/paper).
+
+### Caret Basics
+`train` can take a formula method, a recipe object, or non-formula approach (x/y) to specify the model.
+```{r eval=FALSE}
+train(recipe, data=dataset)
+# or 
+train(y~., data=dataset)
+# or 
+train(x=predictors, y=outcome)
+
+```
+
+Another argument, `method` is used to specify the type of model to fit. This is usually named after the fitting function. We will need to use `method="glmnet"` for that model. ?models has a list of all possibilities.
+
+One way of listing the submodels should be evaluated is to used the `tuneGrid` parameter:
+```{r eval=FALSE}
+train(recipe, 
+      data=car_train,
+      method="glmnet",
+      tuneGrid=glmn_grid)
+```
+
+Alternatively, the `tuneLength` argument will let `train` determine a grid sequence for each parameter. 
+
+### The resampling scheme
+
+How much (and how) should we resample these data to create the model?
+
+Previously, cross-validation was discussed. If 10-fold CV was used, the assessment set would consist of 268 cars (on average). That seems like an acceptable amount of data to determine the RMSE for each submodel. `train` has a control function that can be used to define parameters related to the numerical aspects of the search:
+```{r}
+library(caret)
+ctrl <- trainControl(
+  method = "cv", 
+  # Save the assessment predictions from the best model
+  savePredictions = "final",
+  # Log the progress of the tuning process
+  verboseIter = TRUE
+  )
+```
+
+### Fitting the model via `caret::train`
+
+Let's add some nonlinearity and centering/scaling to the preprocessing and run the search:
+```{r}
+glmn_rec <- basic_rec %>%
+  step_poly(eng_displ) %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors())
+
+set.seed(3544)
+
+glmn_mod <- train(
+  glmn_rec, 
+  data = car_train,
+  method = "glmnet", 
+  trControl = ctrl,
+  tuneGrid = glmn_grid
+  )  
+```
+
+### Aside: submodel trick
+Our grid contained 5 values for `alpha` and 20 values of `lambda`. Although it might seem like we are fitting 100 models per resample, we are not. For many models, including `glmnet`, there are some computational shortcuts that can be used. 
+
+In this case, for a fixed value of `alpha`, the `glmnet` model computes the results for all possible values of `lambda`. Predictions from any of these models can be obtained from the same objects. 
+
+This means that we only need fit 5 models per resample. Trees and otherm odels can often exploit this *submodel trick* and `caret` automatically does this whenever possible.
+
+### Resampling profile for `lambda`
+
+```{r}
+summary(glmn_mod)
+ggplot(glmn_mod)+scale_x_log10()+theme(legend.position="top")
+```
+
+### Model assessment using the assessment set
+Since we used `savePredictions="final"`, the predictions on the assessment sets are contained in the sub-object `glmn_mod$pred`. This can be used to plot the data.
+```{r}
+glmn_mod$pred %>% head(4)
+```
+
+```{r}
+ggplot(glmn_mod$pred, aes(x=obs,y=pred))+
+  geom_abline(col="green",alpha=.5, lwd=1)+
+  geom_point(alpha=.3)+
+  geom_smooth(se=FALSE, col="red",
+              lty=2,lwd=1,alpha=.5)
+```
+
+### Variable importance scores
+For a **linear model** such as glmnet, we can directly inspect and interpret the model coefficients to understand what is going on. 
+
+A more general approach of computing "variable importance scores" can be useful for assessing which predictors are driving the model. These are model-specific. 
+
+For this model, we can plot the absolute values of the coefficients. This is another good reason to center and scale the predictors before the model.
+
+```{r}
+reg_imp <- varImp(glmn_mod, scale=FALSE)
+ggplot(reg_imp, top=30)+xlab("")
+```
+
+
+### Notes on `train`
+Setting the seed just before calling `train` will ensure the same resamples are used between models. There is also [a help page on reproducibility](https://topepo.github.io/caret/model-training-and-tuning.html#repro).
+
+`train` calls the underlying model (e.g., `glmnet`) and arguments can be passed to the lower level functions via the ...
+
+You can write your own model code ()
+
+### Using `glmnet` object
+The `train` object saves optimized model that was fit t in the slot `finalModel`. This can be used as it normally would. The plot on the right is created using
+```{r}
+library(glmnet)
+plot(glmn_mod$finalModel,xvar="lambda")
+```
+
+However, **please don't predict with it!**. Use the `predict` method on the object that is produced by `train`.
+
+## Multivariate Adaptive Regression Splines
+### MARS 
+
+MARS is a nonlinear machine learning model that develops sequential sets of artificial features that are used in linear models (similar to the previous spline discussion). 
+
+The features are "hinge functions" or single knot splines that use the function:
+```{r eval=FALSE}
+h(x) <- function(x) ifelse(x>0, 0)
+```
+
+The MARS model does a fast search through every predictor and every value of each predictor to find a suitable "split" point for the predictor that results in best features.
+
+Suppose a value `x0` is found. The MARS model creates two model terms `h(x-x0)` and `h(x0-x)` that are added to the intercept column. This creates a type of segmented regression.
+
+These terms are the same as deep learning rectified linear units [ReLU](https://en.wikipedia.org/wiki/Rectifier_(neural_networks)).
+
+Let's look at some example data...
+
+### Simulated data
+
+y=2*exp(-6*x(-0.3)^2)+e
+```{r}
+
+x=seq(-1,0.5, by= 0.01)
+# replaced e to 3.14
+y=2*exp(-6*(x-0.3)^2)+3.14
+
+bind_cols(x=x,y=y) %>% 
+  ggplot(aes(x=x,y=y))+
+  geom_jitter()
+```
+
+
+### MARS feature creation - iteration #1
+
+After searching through these data, the model evaluates all possible values of `x0` to find the best "cut" of the data. It finally chooses a value of -0.404.
+
+To do this, it creates these two new predictors that isolate different regions of `x`. If we stop there, these two terms would be added into a linear regression model, yielding:
+```{r eval=FALSE}
+# y=
+# -.111
+# -0.262*h(-0.40175-x)
+# +2.41*h(x-0.40175)
+```
+
+### Fitted model with two features
+```{r, echo=FALSE, fig.align='center', fig.cap="Splitting data into training and test sets.", out.width=175}
+knitr::include_graphics("images/mars-sim-fit-1.png")
+```
+### Growing and Pruning
+
+Similar to tree-based models, MARS starts of  with a "growing" stage where it keeps adding new features until it reaches a pre-defined limit. After the first pair is created, the next cut-point is found using another exhaustive search to see which split of a predictor is best conditional on the existing features.
+
+Once all the features are created a **pruning phase** starts where model selection tools are used to eliminate terms that do not contribute meaningfully to the model. Generalized cross-validation [https://scholar.google.com/scholar?hl=en&as_sdt=0%2C7&q=%22generalized+cross+validation%22&btnG=] is used to efficiently remove model terms while still providing some protection from overfitting.
+
+### Generalized cross validation with MARS
+For linear models, this is a comuptational shortcut that can be used to approximilate leave-one-out cross-validation. GCV can be used since MARS is actually fit using OLS regression. The deafault MARS approach is to let GCV pick how many terms to retain.
+
+I usually don't use this methodology. Instead of include the number of retained terms as a tuning paramaeter, and use the usual resampling methods to optimize it. 
+
+In that way, the relationship between the outcome and the number of terms can be better understood. Also, I've found that using GCV with MARS increases the likelihood of overfitting (anecdotally).
+
+### The final model
+For the simulated data, the MARS model only requires 4 features to model the data (via GCV).
+```{r eval=FALSE}
+## y =
+##   0.0599
+##   - 0.126 * h(-0.404175 - x)
+##   +  1.61 * h(x - -0.404175)
+##   +  2.08 * h(x - -0.222918)
+##   -  5.27 * h(x - 0.244406)
+```
+
+The parameters are estimated by adding the MARS features into Ordinary linear regression models using least squares.
+
+```{r, echo=FALSE, fig.align='center', fig.cap="Splitting data into training and test sets.", out.width=175}
+knitr::include_graphics("images/mars-sim-final-1.png")
+```
+
+
+### Aspects of MARS models
+
+- The model also tests to see if a simple linear term is best (i.e., not split). This is also how dummy variables are evaluated.
+- The model automatically conducts *feature selection*; if a predictor is never used in a split, it is functionally independent of the model. This is really good!
+- If an additive model is used (as in the previous example), the functional form of each predictor can be determined (and visualized) independently for each predictor. 
+- A *second degree* MARS model also evaluates interaction of two hinge features (e.g., `h(x0~x)}h(y-y0)`). This can be useful in isolating regions of bivariate predictor space since it divides two dimensional space into four quadrants. 
+
+### Second degree MARS term example
+
+```{r, echo=FALSE, fig.align='center', fig.cap="Splitting data into training and test sets.", out.width=175}
+knitr::include_graphics("images/mars-2d-1.png")
+```
+
+### MARS in R
+
+The [`mda`](https://cran.r-project.org/web/packages/mda/index.html) package has a mars function but the [`earth`](https://cran.r-project.org/web/packages/earth/index.html) package is far superior. 
+
+The `earth` function has both formula and non-formula interfaces. It can also be used with generalized linear models and flexible discriminant analysis. 
+
+To use the nominal growing and GCV pruning process, the syntax is
+``` {r eval=FALSE}
+earth(y~., data)
+#or
+earth(x=x, y=y)
+```
+
+The feature creation process can be controlled using the `nk`, `nprune` and `pmethod` parameters although this can be somewhat complex. There is a variable method that tracks the changes in the GCV results as features are added to the model.
+
+### MARS via `caret`
+There are several ways to fit the MARS model using `train`.
+
+- `method="earth"` avoids pruning using `GCV` and uses external resampling to choose the number of retained model terms (using the sub-model trick). The two tuning parameters are `nprune` (number of retained features) and `degree`.  
+- `method="gcvEarth"` is also available and uses `GCV`. The `degree` parameter requires tuning.
+
+I usually use the manual method to better understand the pruning process. For preprocessing, there is *no* need to remove **zero-variance predictors** here (beyond computational efficiency), but dummy variables are required fro qualitative predictors. 
+
+Centering and scaling are *not* required.
+
+### Tuning the model
+
+We can reuse much of the `glmnet` syntax to tune the model.
+```{r}
+ctrl$verboseIter <- FALSE
+mars_grid <- expand.grid(degree = 1:2, nprune = seq(2, 60, by = 2))
+# Using the same seed to obtain the same 
+# resamples as the glmnet model.
+set.seed(3544)
+mars_mod <- train(
+  basic_rec, 
+  data = car_train,
+  method = "earth",
+  tuneGrid = mars_grid,
+  trControl = ctrl
+)
+
+summary(mars_grid)
+```
+
+Running the resampling models (plus the last one), this takes 4.5m.
+
+### While we wait, can I interest you in parallelism?
+
+There is no real barrier to running these in parallel. Can we benefit from splitting the fits up to run on multiple cores? These speed-ups can be very model - and data-dependent but this pattern generally holds?
+
+Note that there is little incremental benefit to using more workers than physical cores on the computer. (A lot more details can be found in [this blog post](http://appliedpredictivemodeling.com/blog/2018/1/17/parallel-processing))
+
+### Running in parallel for `caret`
+
+To loop through the models and data sets, `caret` uses the `foreach` package, which can parallelize for loops.
+
+`foreach` has a number of parallel **backends** which allow various technologies to be used in conjunction with the package.
+
+On CRAN, these are the "do{X}" packages, such as [doAzureParallel](https://github.com/Azure/doAzureParallel), [doFuture](https://www.rdocumentation.org/packages/doFuture), [doMC](https://www.rdocumentation.org/packages/doMC), [doMPI](https://www.rdocumentation.org/packages/doMPI), [doParallel](https://www.rdocumentation.org/packages/doParallel), [doRedis](https://www.rdocumentation.org/packages/doRedis), and [doSNOW](https://www.rdocumentation.org/packages/doSNOW).
+
+For example, `doMC` uses the `multicore` package, which forks processes to split computations (for unix and OS X). `doParallel` can be used for all operating systems.
+
+To use parallel processing in `caret`, no changes are needed when calling `train`. The parallel technology must be registered with `foreach` prior to calling train:
+
+```{r eval=FALSE}
+library(doParallel)
+cl <- makecluster(6)
+registerDoParallel(cl)
+
+# run train...
+stopCluster(cl)
+
+# can be helpful:
+parallel::detectCores(logical=FALSE)
+```
+
+### Resampling profile for MARS
+
+```{r}
+ggplot(mars_mod)+theme(legend.position = "top")
+```
+
+### Prediction plot
+```{r}
+ggplot(mars_mod$pred, aes(x = obs, y = pred)) +
+  geom_abline(col = "green", alpha = .5) + 
+  geom_smooth(se = FALSE, col = "red", 
+              lty = 2, lwd = 1, alpha = .5) + 
+  geom_point(alpha = .3)
+```
+
+### The underlying model
+```{r}
+library(earth)
+mars_mod$finalModel
+```
+
+### Variable importance scores
+
+Recall that as MARS adds or drops terms from the model, the change in the GCV statistic is used to determine the worth of the terms. `earth` tracks the changes for each predictor and measures the variable importance based on how much the GCV error *decreases* when the model term is added. 
+
+This is `cumulative` when multiple terms involve the same predictor multiple times.
+
+### Use GCV to tune the model
+
+```{r}
+set.seed(3544)
+
+mars_gcv_mod <- train(
+  basic_rec,
+  data=car_train,
+  method="gcvEarth",
+  tuneGrid = data.frame(degree=1:2),
+  trControl = ctrl
+)
+
+mars_gcv_mod$finalModel
+```
+
+It found the same model using GCV. This is not typical but it is faster (4.1-fold). We will explot this in a moment.
+
+## Ensenbles vs Bagging
+### Baggin models 
+
+[Baggin](https://scholar.google.com/scholar?cluster=18412826781870444603&hl=en&as_sdt=0,7) is a method of creating ensembles of the model type.
+
+Instead of using the training set, many variations of the data are created that spawn multiple versions of the same model. When predicting a new sample, the individual predictions are generated for each model in the ensemble, and these are blended into a single value. This reduces the variation in the predictions since are averaging pseudo-replicates of the model.
+
+Bagging creates the data sets using a **bootstrap sample** of the training set. 
+
+Bagging is most useful when the underlying model has some **instability**. This means that slight variations in the data cause significant changes in the model fit.
+
+For example, simple linear regression would not be a suitable candidate for ensembles but MARS has potential for improvement. It does have the effect of *smoothing* the model predictions. 
+
+### Bagging process
+```{r eval=FALSE}
+knitr::include_graphics("")
+```
+
+### Bagged additive MARS example
+
+```{r}
+knitr::include_graphics("images/mars-bag-final-1.png")
+```
+
+### Does bagging help the car model?
+```{r}
+set.seed(3544)
+mars_gcv_bag <- train(
+  basic_rec,
+  data=car_train,
+  method="bagEarthGCV",
+  tuneGrid=data.frame(degree=1:2),
+  trControl=ctrl,
+  # Number of bootstraps for `bagEarth`
+  B=50
+)
+```
+
+This will take about 39m to run without parallel processing.
+
+```{r}
+mars_gcv_bag
+```
+
+
+### Prediction plot
+```{r}
+ggplot(mars_gcv_bag$pred, aes(x=obs, y=pred))+
+  geom_abline(col="green",alpha=.5)+
+  geom_point(alpha=.3)+
+  geom_smooth(se=FALSE, col="red",
+              lty=2, lwd=1, alpha=.5)
+```
+
+### So what about those high MPG cars?
+
+All of the modesl have really missed some of the high MPG cars. 
+What is it about these?
+```{r}
+car_train %>% 
+  arrange(mpg) %>% 
+  select(mpg, carline, model_year) %>% 
+  tail(10)
+```
+
+It turns out that there is no indicator in the data for hybrid and/or electric vehicles.
+
+## Comparing models via Bayesian analysis
+### Collecting and analyzing the resampling results
+
+First, we can use the `resamples` function in `caret` to collect and collate the cross-validation results across the different models. 
+```{r}
+rs <- resamples(
+  list(glmn=glmn_mod, MARS=mars_mod, bagged=mars_gcv_bag)
+)
+```
+
+The `tidyposterior` package is designed to estimate the relationship between the outcome metrics (i.e., RMSE) as a function of the model type (i.e., MARS) in a way to takes into account the resample-to-resample covariances that can occur. 
+
+A simple [Bayesian linear model](http://mc-stan.org/rstanarm/articles/continuous.html) is used here for that purpose. I recommend the book [statistical Rethinking](http://xcelab.net/rm/statistical-rethinking/) if you are new to Bayesian analysis. 
+
+
+### Bayesian Hierachical linear model
+
+If we did a basic ANOVa model to compare models, it might look like:
+$$
+RMSE=b_0+b_1m_1+b_2m_2
+$$
+
+where $m_j$ are the indicator variables for the models (`glmnet`, `MARS` etc.).
+
+However, there are usually resample-to-resample effects. To account fi this ,we can make this ANOVA model specific to a resample:
+$$
+RMSE_i = b_{i0}+b_{i1}m_1+b_2m_{i2}
+$$
+
+We might assume that each
+$$
+RMSE_{ij} - N(\beta_{i0}+\beta_{ij} m_{ij}, \sigma^2)
+$$
+ 
+and that the $b$ parameters have some multivariate normal distribution with mean $\beta$ and some covariance matrix. The distribution of the $\beta$ values, along with a distribution for the variance parameter, are the prior distributions.
+
+Bayesian analysis can be used to estimate these parameters. tidyposterior uses `Stan` to fit the model. 
+
+There are options to change the assumed distribution of the metric (i.e., gamma instead of normality) or to transform the metric to normality. Different variances per model can also be estimated and priors can be changed.
+
+### comparing modles using Bayesian analysis
+
+`tidyposterior::perf_mod` can take the `resamples` object as input, configure the Bayesian model, and  
+
+
+
+
+
+
+
+
+
 
 
 
