@@ -26,6 +26,7 @@ RStudio 2017 Conference by Max Kuhn
 ## UseR2019 @ Toulouse
 ### Slides/materials: 
 Sowla's Repo: https://github.com/sowla/useR2019-materials  
+all day covered and the video(keynote) is already available @[RConsortium's Youtube account](https://www.youtube.com/channel/UC_R5smHVXRYGhZYDJsnXTwg).   
 
 ### Schedule
 https://connect.rstudioservices.com/content/331/user2019-schedule.html
