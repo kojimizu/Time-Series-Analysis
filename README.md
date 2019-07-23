@@ -33,11 +33,3 @@ all day covered and the video(keynote) is already available @[RConsortium's Yout
 
 #### Handling with Missing Values 
 Julie Josse again   
-
-
-
-## -------------------------
-Useful packages  
-## Datapasta
-simple data load as tibble: datapasta + reprex   
-https://github.com/MilesMcBain/datapasta
