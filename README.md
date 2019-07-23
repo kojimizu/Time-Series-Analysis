@@ -19,8 +19,7 @@ by Max Kuhn
 - Repo: https://github.com/topepo/user2018  
 - Video: https://www.youtube.com/watch?v=JacpQdj1Vfc  
  
-### 4. Applied Machine Learning
-RStudio 2017 Conference by Max Kuhn 
+### 4. XGboost
 - Repo: https://github.com/hetong007/user2018tutorial  
 
 ## UseR2019 @ Toulouse
